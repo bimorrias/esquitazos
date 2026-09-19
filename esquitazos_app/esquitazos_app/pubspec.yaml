@@ -1,4 +1,4 @@
-name: esquitazos_app
+name: esquitazos
 description: "Esquitazos POS y Billetera"
 publish_to: 'none'
 version: 1.0.0+1
