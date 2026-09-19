@@ -4,11 +4,15 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -16,10 +20,10 @@ jobs:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      - name: Install dependencies
-        run: flutter pub get --no-example
+      - name: Get dependencies
+        run: flutter pub get
 
-      - name: Build Web
+      - name: Build Web app
         run: flutter build web --release --base-href "/esquitazos/"
 
       - name: Deploy to GitHub Pages
@@ -27,4 +31,3 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./build/web
- 
