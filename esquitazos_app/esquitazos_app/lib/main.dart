@@ -254,8 +254,6 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         historialGastos = jsonList.map((e) => GastoRegistrado.fromJson(e)).toList();
       }
 
-      // BLINDAJE DE SABORES: Si ya existen en memoria local, respetamos lo del usuario.
-      // Si el almacenamiento está totalmente virgen, cargamos los base iniciales.
       String? saboresString = prefs.getString('menuSabores');
       if (saboresString != null) {
         List<dynamic> jsonList = jsonDecode(saboresString);
@@ -548,7 +546,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
 }
 
 // -----------------------------------------------------------------------------
-// 1. CAJA RÁPIDA (FLUIDA, CON BOTONES DE -5/+5 RÁPIDOS Y AVISO VISUAL)
+// 1. CAJA RÁPIDA (FLUIDA, CON ACUMULADOR FLOTANTE ANIMADO)
 // -----------------------------------------------------------------------------
 class CajaRapidaVista extends StatefulWidget {
   final List<SaborInfo> menuSabores;
@@ -581,6 +579,11 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
   bool enFaseCongelada = false;
   Timer? _timerRefrescoTiempo;
 
+  // Variables para la ventanilla flotante acumulativa
+  double _deltaAcumulado = 0.0;
+  bool _mostrarBadgeFlotante = false;
+  Timer? _badgeTimer;
+
   @override
   void initState() {
     super.initState();
@@ -594,6 +597,7 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
     _timerGracia?.cancel();
     _timerCuentaAtras?.cancel();
     _timerRefrescoTiempo?.cancel();
+    _badgeTimer?.cancel();
     super.dispose();
   }
 
@@ -618,6 +622,8 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
         itemsCarrito.clear();
         totalOrdenActual = 0.0;
         enFaseCongelada = false;
+        _deltaAcumulado = 0.0;
+        _mostrarBadgeFlotante = false;
       });
     }
 
@@ -644,20 +650,23 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
       totalOrdenActual += cambio;
       if (totalOrdenActual < 0) totalOrdenActual = 0;
       _segundosRestantes = 5;
+      
+      // Acumulamos en la píldora flotante
+      _deltaAcumulado += cambio;
+      _mostrarBadgeFlotante = true;
     });
     _iniciarTemporizadores();
 
-    String textoAviso = cambio > 0 ? '+ \$${cambio.toInt()} a la orden' : '- \$${cambio.abs().toInt()} a la orden';
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(textoAviso, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-        duration: const Duration(milliseconds: 900),
-        backgroundColor: cambio > 0 ? Colors.green.shade800 : Colors.red.shade800,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(12),
-      ),
-    );
+    // Reiniciamos el timer de la ventanilla flotante para que se mantenga visible y sume correctamente
+    _badgeTimer?.cancel();
+    _badgeTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (mounted) {
+        setState(() {
+          _mostrarBadgeFlotante = false;
+          _deltaAcumulado = 0.0;
+        });
+      }
+    });
   }
 
   void _deshacerUltimo() {
@@ -670,6 +679,8 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
       if (itemsCarrito.isEmpty) {
         _cancelarTemporizadores();
         totalOrdenActual = 0.0;
+        _deltaAcumulado = 0.0;
+        _mostrarBadgeFlotante = false;
       }
     });
   }
@@ -700,7 +711,11 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
     if (itemsCarrito.isEmpty || !mounted) return;
     HapticFeedback.vibrate();
     widget.onVentaCompletada(itemsCarrito, totalOrdenActual);
-    setState(() => enFaseCongelada = true);
+    setState(() {
+      enFaseCongelada = true;
+      _mostrarBadgeFlotante = false;
+      _deltaAcumulado = 0.0;
+    });
     _timerCuentaAtras?.cancel();
 
     Timer(const Duration(seconds: 15), () {
@@ -728,212 +743,263 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
     double fontPrecio = 12.0 + (widget.nivelTextoMostrador * 2.0);
     double fontTotalNum = 20.0 + (widget.nivelTextoTotal * 2.5);
 
-    return Column(
+    return Stack(
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          color: const Color(0xFF1E293B),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('🕒 Últimas Ventas de Hoy:', style: TextStyle(color: Colors.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              if (ultimas3Hoy.isEmpty)
-                const Text('Esperando primera venta del día...', style: TextStyle(color: Colors.grey, fontSize: 11))
-              else
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: ultimas3Hoy.map((v) {
-                      String resumen = v.items.map((i) => '${i['emoji']}${i['tamano'].substring(0, 1)}').join(', ');
-                      String haceCuanto = _formatearTiempoHace(v.fechaHora);
+        Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: const Color(0xFF1E293B),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('🕒 Últimas Ventas de Hoy:', style: TextStyle(color: Colors.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  if (ultimas3Hoy.isEmpty)
+                    const Text('Esperando primera venta del día...', style: TextStyle(color: Colors.grey, fontSize: 11))
+                  else
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: ultimas3Hoy.map((v) {
+                          String resumen = v.items.map((i) => '${i['emoji']}${i['tamano'].substring(0, 1)}').join(', ');
+                          String haceCuanto = _formatearTiempoHace(v.fechaHora);
 
-                      return Container(
-                        margin: const EdgeInsets.only(right: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0F172A),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.cyan.withValues(alpha: 0.3), width: 1),
-                        ),
-                        child: Row(
-                          children: [
-                            Text(
-                              '#${v.numeroVentaDia} ➔ $resumen (\$${v.total.toStringAsFixed(0)})',
-                              style: const TextStyle(fontSize: 11, color: Colors.white70),
+                          return Container(
+                            margin: const EdgeInsets.only(right: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.cyan.withValues(alpha: 0.3), width: 1),
                             ),
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.cyan.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                haceCuanto,
-                                style: const TextStyle(fontSize: 10, color: Colors.cyan, fontWeight: FontWeight.bold),
-                              ),
+                            child: Row(
+                              children: [
+                                Text(
+                                  '#${v.numeroVentaDia} ➔ $resumen (\$${v.total.toStringAsFixed(0)})',
+                                  style: const TextStyle(fontSize: 11, color: Colors.white70),
+                                ),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.cyan.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    haceCuanto,
+                                    style: const TextStyle(fontSize: 10, color: Colors.cyan, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                InkWell(
+                                  onTap: () => widget.onEliminarVenta(v),
+                                  child: const Icon(Icons.close, color: Colors.redAccent, size: 14),
+                                )
+                              ],
                             ),
-                            const SizedBox(width: 6),
-                            InkWell(
-                              onTap: () => widget.onEliminarVenta(v),
-                              child: const Icon(Icons.close, color: Colors.redAccent, size: 14),
-                            )
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: widget.menuSabores.length,
-            itemBuilder: (context, index) {
-              final sabor = widget.menuSabores[index];
-              return Card(
-                color: const Color(0xFF1E293B),
-                margin: const EdgeInsets.only(bottom: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(12),
+                itemCount: widget.menuSabores.length,
+                itemBuilder: (context, index) {
+                  final sabor = widget.menuSabores[index];
+                  return Card(
+                    color: const Color(0xFF1E293B),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(sabor.emoji, style: const TextStyle(fontSize: 20)),
-                          const SizedBox(width: 8),
-                          Text(sabor.nombre, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+                          Row(
+                            children: [
+                              Text(sabor.emoji, style: const TextStyle(fontSize: 20)),
+                              const SizedBox(width: 8),
+                              Text(sabor.nombre, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _BotonPop(
+                                  label: '${sabor.emoji} MEDIANO',
+                                  precio: sabor.precioMediano,
+                                  color: sabor.color,
+                                  fontSizeLabel: fontBoton,
+                                  fontSizePrecio: fontPrecio,
+                                  onTap: () => _agregarProducto(sabor.id, sabor.emoji, sabor.nombre, 'Mediano', sabor.precioMediano),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _BotonPop(
+                                  label: '${sabor.emoji} GRANDE',
+                                  precio: sabor.precioGrande,
+                                  color: sabor.color,
+                                  fontSizeLabel: fontBoton,
+                                  fontSizePrecio: fontPrecio,
+                                  onTap: () => _agregarProducto(sabor.id, sabor.emoji, sabor.nombre, 'Grande', sabor.precioGrande),
+                                ),
+                              ),
+                            ],
+                          )
                         ],
                       ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _BotonPop(
-                              label: '${sabor.emoji} MEDIANO',
-                              precio: sabor.precioMediano,
-                              color: sabor.color,
-                              fontSizeLabel: fontBoton,
-                              fontSizePrecio: fontPrecio,
-                              onTap: () => _agregarProducto(sabor.id, sabor.emoji, sabor.nombre, 'Mediano', sabor.precioMediano),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _BotonPop(
-                              label: '${sabor.emoji} GRANDE',
-                              precio: sabor.precioGrande,
-                              color: sabor.color,
-                              fontSizeLabel: fontBoton,
-                              fontSizePrecio: fontPrecio,
-                              onTap: () => _agregarProducto(sabor.id, sabor.emoji, sabor.nombre, 'Grande', sabor.precioGrande),
-                            ),
-                          ),
-                        ],
-                      )
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        if (itemsCarrito.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            color: const Color(0xFF0F172A),
-            child: Row(
-              children: [
-                const Icon(Icons.shopping_cart, color: Colors.cyan, size: 18),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Text(
-                      itemsCarrito.map((e) => '${e['emoji']} ${e['tamano']}').join(' + '),
-                      style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
                     ),
-                  ),
-                ),
-                if (!enFaseCongelada) ...[
-                  InkWell(
-                    onTap: () => _ajustarTotalFluido(-5.0),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                      decoration: BoxDecoration(color: Colors.redAccent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.redAccent)),
-                      child: const Text('-5', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  InkWell(
-                    onTap: () => _ajustarTotalFluido(5.0),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                      decoration: BoxDecoration(color: Colors.greenAccent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.greenAccent)),
-                      child: const Text('+5', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  TextButton(
-                    onPressed: _deshacerUltimo,
-                    style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(45, 30)),
-                    child: const Text('DESHACER', style: TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                  )
-                ]
-              ],
+                  );
+                },
+              ),
             ),
-          ),
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          color: enFaseCongelada
-              ? const Color(0xFF15803D)
-              : (itemsCarrito.isNotEmpty ? const Color(0xFF0284C7) : const Color(0xFF1E293B)),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            if (itemsCarrito.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                color: const Color(0xFF0F172A),
+                child: Row(
                   children: [
-                    Text(
-                      enFaseCongelada
-                          ? '✅ ORDEN COBRADA'
-                          : (itemsCarrito.isNotEmpty ? '⏳ Guardando automáticamente en ${_segundosRestantes}s...' : 'Esperando cliente...'),
-                      style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w500),
-                      overflow: TextOverflow.ellipsis,
+                    const Icon(Icons.shopping_cart, color: Colors.cyan, size: 18),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Text(
+                          itemsCarrito.map((e) => '${e['emoji']} ${e['tamano']}').join(' + '),
+                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                        ),
+                      ),
                     ),
+                    if (!enFaseCongelada) ...[
+                      InkWell(
+                        onTap: () => _ajustarTotalFluido(-5.0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                          decoration: BoxDecoration(color: Colors.redAccent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.redAccent)),
+                          child: const Text('-5', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      InkWell(
+                        onTap: () => _ajustarTotalFluido(5.0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                          decoration: BoxDecoration(color: Colors.greenAccent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.greenAccent)),
+                          child: const Text('+5', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      TextButton(
+                        onPressed: _deshacerUltimo,
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(45, 30)),
+                        child: const Text('DESHACER', style: TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                      )
+                    ]
+                  ],
+                ),
+              ),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              color: enFaseCongelada
+                  ? const Color(0xFF15803D)
+                  : (itemsCarrito.isNotEmpty ? const Color(0xFF0284C7) : const Color(0xFF1E293B)),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          enFaseCongelada
+                              ? '✅ ORDEN COBRADA'
+                              : (itemsCarrito.isNotEmpty ? '⏳ Guardando automáticamente en ${_segundosRestantes}s...' : 'Esperando cliente...'),
+                          style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w500),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          '\$${totalOrdenActual.toStringAsFixed(2)} MXN',
+                          style: TextStyle(fontSize: fontTotalNum, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (enFaseCongelada) ...[
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        minimumSize: const Size(90, 36),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          itemsCarrito.clear();
+                          totalOrdenActual = 0.0;
+                          enFaseCongelada = false;
+                        });
+                      },
+                      child: const Text('SIGUIENTE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    )
+                  ]
+                ],
+              ),
+            ),
+          ],
+        ),
+
+        // 🌟 VENTANILLA FLOTANTE ACUMULATIVA ANIMADA
+        Positioned(
+          bottom: 110,
+          right: 20,
+          child: AnimatedOpacity(
+            opacity: _mostrarBadgeFlotante ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 250),
+            child: AnimatedScale(
+              scale: _mostrarBadgeFlotante ? 1.0 : 0.7,
+              duration: const Duration(milliseconds: 250),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _deltaAcumulado >= 0 ? Colors.green.shade800 : Colors.red.shade800,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
+                    )
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _deltaAcumulado >= 0 ? Icons.add_circle : Icons.remove_circle,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
                     Text(
-                      '\$${totalOrdenActual.toStringAsFixed(2)} MXN',
-                      style: TextStyle(fontSize: fontTotalNum, fontWeight: FontWeight.bold, color: Colors.white),
+                      '${_deltaAcumulado >= 0 ? '+' : ''}\$${_deltaAcumulado.toInt()}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                   ],
                 ),
               ),
-              if (enFaseCongelada) ...[
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    minimumSize: const Size(90, 36),
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      itemsCarrito.clear();
-                      totalOrdenActual = 0.0;
-                      enFaseCongelada = false;
-                    });
-                  },
-                  child: const Text('SIGUIENTE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                )
-              ]
-            ],
+            ),
           ),
         ),
       ],
