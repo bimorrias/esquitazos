@@ -1,20 +1,28 @@
-name: esquitazos
-description: "Esquitazos POS y Billetera"
+name: esquitazos_app
+description: "A new Flutter project."
 publish_to: 'none'
-version: 1.0.0+1
+
+version: 1.0.0+2
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.13.3 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  shared_preferences: ^2.3.0
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.5.2  # Usamos una versión estable 2.5.x altamente compatible con Kotlin moderno
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.13.1  
+
+flutter_launcher_icons:
+  image_path: "logo_esquitazos.png"
+  android: true
+  web: true
 
 flutter:
   uses-material-design: true

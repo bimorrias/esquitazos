@@ -60,6 +60,12 @@ class Fechas {
     if (diaIndex >= 1 && diaIndex <= 7) return dias[diaIndex - 1];
     return "N/A";
   }
+
+  static String formatoBalanceDia(DateTime f) {
+    int diaSemana = f.weekday;
+    String nombreDia = nombreDiaSemana(diaSemana);
+    return "$nombreDia, ${diaMesAnio(f)}";
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -465,12 +471,13 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         nivelTextoMostrador: nivelTextoMostrador,
         nivelTextoTotal: nivelTextoTotal,
         onVentaCompletada: _registrarNuevaVenta,
-        onEliminarVenta: (v) => _eliminarVenta(v.fechaHora, v),
+        onEliminarVenta: _eliminarVenta,
       ),
       BilleteraVista(
         saldoEfectivoEnMano: saldoEfectivoEnMano,
         historialGastos: historialGastos,
         categoriasGastos: categoriasGastos,
+        mostrarTotalAcumulado: _mostrarTotalAcumulado,
         onRegistrarGasto: _registrarGasto,
         onEditarGasto: _editarGasto,
         onEliminarGasto: _eliminarGasto,
@@ -492,6 +499,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         menuSabores: menuSabores,
         lotesPorMes: lotesPorMes,
         mesVisualizado: mesVisualizadoResumen,
+        mostrarTotalAcumulado: _mostrarTotalAcumulado,
         onCambiarMes: _cambiarMesResumen,
       ),
       AjustesVista(
@@ -546,7 +554,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
 }
 
 // -----------------------------------------------------------------------------
-// 1. CAJA RÁPIDA (FLUIDA, CON ACUMULADOR FLOTANTE ANIMADO)
+// 1. CAJA RÁPIDA
 // -----------------------------------------------------------------------------
 class CajaRapidaVista extends StatefulWidget {
   final List<SaborInfo> menuSabores;
@@ -554,7 +562,7 @@ class CajaRapidaVista extends StatefulWidget {
   final double nivelTextoMostrador;
   final double nivelTextoTotal;
   final Function(List<Map<String, dynamic>>, double) onVentaCompletada;
-  final Function(VentaRegistrada) onEliminarVenta;
+  final Function(DateTime, VentaRegistrada) onEliminarVenta;
 
   const CajaRapidaVista({
     super.key,
@@ -579,7 +587,6 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
   bool enFaseCongelada = false;
   Timer? _timerRefrescoTiempo;
 
-  // Variables para la ventanilla flotante acumulativa
   double _deltaAcumulado = 0.0;
   bool _mostrarBadgeFlotante = false;
   Timer? _badgeTimer;
@@ -651,13 +658,11 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
       if (totalOrdenActual < 0) totalOrdenActual = 0;
       _segundosRestantes = 5;
       
-      // Acumulamos en la píldora flotante
       _deltaAcumulado += cambio;
       _mostrarBadgeFlotante = true;
     });
     _iniciarTemporizadores();
 
-    // Reiniciamos el timer de la ventanilla flotante para que se mantenga visible y sume correctamente
     _badgeTimer?.cancel();
     _badgeTimer = Timer(const Duration(milliseconds: 2500), () {
       if (mounted) {
@@ -707,6 +712,12 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
     _segundosRestantes = 5;
   }
 
+  void _registrarInmediato() {
+    if (itemsCarrito.isEmpty || enFaseCongelada) return;
+    _cancelarTemporizadores();
+    _congelarYGuardarOrden();
+  }
+
   void _congelarYGuardarOrden() {
     if (itemsCarrito.isEmpty || !mounted) return;
     HapticFeedback.vibrate();
@@ -728,6 +739,34 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
         });
       }
     });
+  }
+
+  void _confirmarBorradoVentaRapida(VentaRegistrada v) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 26),
+            SizedBox(width: 8),
+            Text('¿Eliminar esta venta?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text('Vas a eliminar la venta #${v.numeroVentaDia} por \$${v.total.toStringAsFixed(0)}. Esta acción descontará el dinero de tu efectivo en mano.', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () {
+              widget.onEliminarVenta(v.fechaHora, v);
+              Navigator.pop(context);
+            },
+            child: const Text('SÍ, BORRAR VENTA', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -793,7 +832,7 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
                                 ),
                                 const SizedBox(width: 6),
                                 InkWell(
-                                  onTap: () => widget.onEliminarVenta(v),
+                                  onTap: () => _confirmarBorradoVentaRapida(v),
                                   child: const Icon(Icons.close, color: Colors.redAccent, size: 14),
                                 )
                               ],
@@ -878,6 +917,18 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
                       ),
                     ),
                     if (!enFaseCongelada) ...[
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          minimumSize: const Size(70, 30),
+                        ),
+                        onPressed: _registrarInmediato,
+                        icon: const Icon(Icons.check, size: 14),
+                        label: const Text('REGISTRAR YA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(width: 6),
                       InkWell(
                         onTap: () => _ajustarTotalFluido(-5.0),
                         child: Container(
@@ -955,8 +1006,6 @@ class _CajaRapidaVistaState extends State<CajaRapidaVista> {
             ),
           ],
         ),
-
-        // 🌟 VENTANILLA FLOTANTE ACUMULATIVA ANIMADA
         Positioned(
           bottom: 110,
           right: 20,
@@ -1014,6 +1063,7 @@ class BilleteraVista extends StatefulWidget {
   final double saldoEfectivoEnMano;
   final List<GastoRegistrado> historialGastos;
   final List<String> categoriasGastos;
+  final bool mostrarTotalAcumulado;
   final Function(double, String, String, bool) onRegistrarGasto;
   final Function(GastoRegistrado) onEditarGasto;
   final Function(GastoRegistrado) onEliminarGasto;
@@ -1025,6 +1075,7 @@ class BilleteraVista extends StatefulWidget {
     required this.saldoEfectivoEnMano,
     required this.historialGastos,
     required this.categoriasGastos,
+    required this.mostrarTotalAcumulado,
     required this.onRegistrarGasto,
     required this.onEditarGasto,
     required this.onEliminarGasto,
@@ -1252,6 +1303,13 @@ class _BilleteraVistaState extends State<BilleteraVista> {
 
   @override
   Widget build(BuildContext context) {
+    Color colorSaldo = Colors.cyan;
+    if (!widget.mostrarTotalAcumulado) {
+      colorSaldo = Colors.white;
+    } else {
+      colorSaldo = widget.saldoEfectivoEnMano >= 0 ? Colors.cyan : Colors.redAccent;
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('💳 Tu Billetera Real', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -1279,11 +1337,13 @@ class _BilleteraVistaState extends State<BilleteraVista> {
                     ],
                   ),
                   Text(
-                    '\$${widget.saldoEfectivoEnMano.toStringAsFixed(2)} MXN',
+                    widget.mostrarTotalAcumulado
+                        ? '\$${widget.saldoEfectivoEnMano.toStringAsFixed(2)} MXN'
+                        : '\$ • • • • •',
                     style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
-                      color: widget.saldoEfectivoEnMano >= 0 ? Colors.cyan : Colors.redAccent,
+                      color: colorSaldo,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -1415,9 +1475,9 @@ class _BilleteraVistaState extends State<BilleteraVista> {
 }
 
 // -----------------------------------------------------------------------------
-// 3. BALANCE DIARIO
+// 3. BALANCE DIARIO (CON ORDEN INVERSO: HOY ARRIBA)
 // -----------------------------------------------------------------------------
-class HistorialPorDiaVista extends StatelessWidget {
+class HistorialPorDiaVista extends StatefulWidget {
   final Map<String, List<VentaRegistrada>> ventasPorMes;
   final List<SaborInfo> menuSabores;
   final Map<String, Map<String, Map<String, double>>> lotesPorMes;
@@ -1439,28 +1499,64 @@ class HistorialPorDiaVista extends StatelessWidget {
     required this.onCambiarLote,
   });
 
+  @override
+  State<HistorialPorDiaVista> createState() => _HistorialPorDiaVistaState();
+}
+
+class _HistorialPorDiaVistaState extends State<HistorialPorDiaVista> {
+  final Set<String> _diasDesbloqueados = {};
+
   String _obtenerClaveMes(DateTime fecha) => "${fecha.year}_${fecha.month.toString().padLeft(2, '0')}";
   String _obtenerClaveDia(DateTime fecha) => "${fecha.year}_${fecha.month.toString().padLeft(2, '0')}_${fecha.day.toString().padLeft(2, '0')}";
+
+  void _confirmarBorradoVenta(DateTime fechaVenta, VentaRegistrada venta) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 26),
+            SizedBox(width: 8),
+            Text('¿Estás seguro?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text('Vas a borrar la venta #${venta.numeroVentaDia} por \$${venta.total.toStringAsFixed(0)}. Esta acción no se puede deshacer.', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCELAR', style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () {
+              widget.onEliminarVenta(fechaVenta, venta);
+              Navigator.pop(context);
+            },
+            child: const Text('SÍ, BORRAR', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     DateTime ahora = DateTime.now();
     String claveMesActual = _obtenerClaveMes(ahora);
-    List<VentaRegistrada> ventasMes = ventasPorMes[claveMesActual] ?? [];
+    List<VentaRegistrada> ventasMes = widget.ventasPorMes[claveMesActual] ?? [];
 
     Map<String, List<VentaRegistrada>> ventasAgrupadas = {};
     for (var venta in ventasMes) {
-      String claveDia = Fechas.diaMesAnio(venta.fechaHora);
+      String claveDia = Fechas.formatoBalanceDia(venta.fechaHora);
       ventasAgrupadas.putIfAbsent(claveDia, () => []).add(venta);
     }
 
-    String hoyNormalizado = Fechas.diaMesAnio(ahora);
-    ventasAgrupadas.putIfAbsent(hoyNormalizado, () => []);
+    String hoyFormateado = Fechas.formatoBalanceDia(ahora);
+    ventasAgrupadas.putIfAbsent(hoyFormateado, () => []);
 
-    final diasOrdenados = ventasAgrupadas.keys.toList()
-      ..sort((a, b) => b.compareTo(a));
+    final diasOrdenados = ventasAgrupadas.keys.toList();
+    // 🌟 ORDEN INVERSO: El día actual / más reciente queda hasta arriba
+    diasOrdenados.sort((a, b) => b.compareTo(a));
 
-    double fontSizeBase = 12.0 + (nivelTextoHistorial * 2.0);
+    double fontSizeBase = 12.0 + (widget.nivelTextoHistorial * 2.0);
     String mesActualNombre = Fechas.nombreMesAnio(ahora);
 
     return Scaffold(
@@ -1469,8 +1565,8 @@ class HistorialPorDiaVista extends StatelessWidget {
         backgroundColor: const Color(0xFF1E293B),
         actions: [
           IconButton(
-            icon: Icon(mostrarTotalAcumulado ? Icons.visibility : Icons.visibility_off, color: Colors.cyan),
-            onPressed: onToggleOjito,
+            icon: Icon(widget.mostrarTotalAcumulado ? Icons.visibility : Icons.visibility_off, color: Colors.cyan),
+            onPressed: widget.onToggleOjito,
           )
         ],
       ),
@@ -1478,12 +1574,16 @@ class HistorialPorDiaVista extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         itemCount: diasOrdenados.length,
         itemBuilder: (context, index) {
-          String diaNormalizado = diasOrdenados[index];
-          List<VentaRegistrada> ventasDelDia = ventasAgrupadas[diaNormalizado]!;
+          String diaFormateadoStr = diasOrdenados[index];
+          List<VentaRegistrada> ventasDelDia = ventasAgrupadas[diaFormateadoStr]!;
           
           DateTime fechaObj = ventasDelDia.isNotEmpty 
               ? ventasDelDia.first.fechaHora 
-              : (diaNormalizado == hoyNormalizado ? ahora : DateTime.now());
+              : ahora;
+
+          bool esHoy = Fechas.diaMesAnio(fechaObj) == Fechas.diaMesAnio(ahora);
+          bool estaDesbloqueado = _diasDesbloqueados.contains(diaFormateadoStr);
+          bool sePuedeEditar = esHoy || estaDesbloqueado;
 
           double ventaTotalBruta = ventasDelDia.fold(0.0, (sum, item) => sum + item.total);
 
@@ -1492,7 +1592,7 @@ class HistorialPorDiaVista extends StatelessWidget {
             for (var item in v.items) {
               String sNombre = item['sabor'] ?? '';
               String sTamano = item['tamano'] ?? '';
-              var saborObj = menuSabores.firstWhere(
+              var saborObj = widget.menuSabores.firstWhere(
                 (s) => s.nombre == sNombre || sNombre.contains(s.nombre),
                 orElse: () => SaborInfo(id: '', nombre: '', emoji: '', color: Colors.white, precioMediano: 0, precioGrande: 0, costoLoteCompleto: 0, costoInsumosMediano: 0, costoInsumosGrande: 0),
               );
@@ -1503,27 +1603,39 @@ class HistorialPorDiaVista extends StatelessWidget {
 
           String claveMes = _obtenerClaveMes(fechaObj);
           String claveDia = _obtenerClaveDia(fechaObj);
-          Map<String, double> lotesDelDia = lotesPorMes[claveMes]?[claveDia] ?? {};
+          Map<String, double> lotesDelDia = widget.lotesPorMes[claveMes]?[claveDia] ?? {};
 
           double gastoCocinadaDia = 0.0;
           lotesDelDia.forEach((saborId, fraccion) {
-            var saborObj = menuSabores.firstWhere((s) => s.id == saborId, orElse: () => menuSabores.first);
+            var saborObj = widget.menuSabores.firstWhere((s) => s.id == saborId, orElse: () => widget.menuSabores.first);
             gastoCocinadaDia += (saborObj.costoLoteCompleto * fraccion);
           });
 
           double gastoTotalDia = gastoCocinadaDia + gastoInsumosVariables;
           double resultadoNeto = ventaTotalBruta - gastoTotalDia;
 
+          Color colorResultadoNeto;
+          if (!widget.mostrarTotalAcumulado) {
+            colorResultadoNeto = Colors.white;
+          } else {
+            colorResultadoNeto = resultadoNeto >= 0 ? Colors.greenAccent : Colors.redAccent;
+          }
+
           Map<String, int> conteoVasosDiaMediano = {};
           Map<String, int> conteoVasosDiaGrande = {};
+          int totalVasosMedianosDia = 0;
+          int totalVasosGrandesDia = 0;
+
           for (var venta in ventasDelDia) {
             for (var item in venta.items) {
               String sabor = item['sabor'] ?? 'Desconocido';
               String tamano = item['tamano'] ?? '';
               if (tamano == 'Mediano') {
                 conteoVasosDiaMediano[sabor] = (conteoVasosDiaMediano[sabor] ?? 0) + 1;
+                totalVasosMedianosDia++;
               } else if (tamano == 'Grande') {
                 conteoVasosDiaGrande[sabor] = (conteoVasosDiaGrande[sabor] ?? 0) + 1;
+                totalVasosGrandesDia++;
               }
             }
           }
@@ -1533,7 +1645,31 @@ class HistorialPorDiaVista extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 12),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: ExpansionTile(
-              title: Text(diaNormalizado, style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: fontSizeBase)),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(diaFormateadoStr, style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: fontSizeBase)),
+                  ),
+                  if (!esHoy)
+                    IconButton(
+                      icon: Icon(
+                        estaDesbloqueado ? Icons.lock_open : Icons.edit,
+                        color: estaDesbloqueado ? Colors.greenAccent : Colors.amberAccent,
+                        size: 20,
+                      ),
+                      tooltip: estaDesbloqueado ? 'Día desbloqueado para edición' : 'Desbloquear edición con lápiz',
+                      onPressed: () {
+                        setState(() {
+                          if (estaDesbloqueado) {
+                            _diasDesbloqueados.remove(diaFormateadoStr);
+                          } else {
+                            _diasDesbloqueados.add(diaFormateadoStr);
+                          }
+                        });
+                      },
+                    ),
+                ],
+              ),
               subtitle: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1541,17 +1677,23 @@ class HistorialPorDiaVista extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Venta Bruta: \$${ventaTotalBruta.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                      Text('Gasto Día: \$${gastoTotalDia.toStringAsFixed(0)}', style: const TextStyle(color: Colors.orangeAccent, fontSize: 11)),
+                      Text(
+                        widget.mostrarTotalAcumulado ? 'Venta Bruta: \$${ventaTotalBruta.toStringAsFixed(0)}' : 'Venta Bruta: \$ • • •',
+                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                      ),
+                      Text(
+                        widget.mostrarTotalAcumulado ? 'Gasto Día: \$${gastoTotalDia.toStringAsFixed(0)}' : 'Gasto Día: \$ • • •',
+                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 11),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    mostrarTotalAcumulado
+                    widget.mostrarTotalAcumulado
                         ? 'Ganancia Neta: \$${resultadoNeto.toStringAsFixed(2)} MXN'
                         : 'Ganancia Neta: \$ • • • • •',
                     style: TextStyle(
-                      color: resultadoNeto >= 0 ? Colors.greenAccent : Colors.redAccent,
+                      color: colorResultadoNeto,
                       fontWeight: FontWeight.bold,
                       fontSize: fontSizeBase,
                     ),
@@ -1560,17 +1702,28 @@ class HistorialPorDiaVista extends StatelessWidget {
               ),
               children: [
                 Container(
+                  color: const Color(0xFF141D2F),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('🥤 Total Vasos Vendidos:', style: TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      Text('Medianos: $totalVasosMedianosDia  |  Grandes: $totalVasosGrandesDia', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                Container(
                   color: const Color(0xFF0F172A),
                   padding: const EdgeInsets.all(12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('🍿 Resumen de Vasos Vendidos Hoy:', style: TextStyle(color: Colors.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+                      const Text('🍿 Desglose por Sabor (Vasos Hoy):', style: TextStyle(color: Colors.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 6),
                       if (ventasDelDia.isEmpty)
-                        const Text('Aún sin ventas registradas hoy.', style: TextStyle(color: Colors.grey, fontSize: 11))
+                        const Text('Aún sin ventas registradas este día.', style: TextStyle(color: Colors.grey, fontSize: 11))
                       else
-                        ...menuSabores.map((sabor) {
+                        ...widget.menuSabores.map((sabor) {
                           int med = conteoVasosDiaMediano[sabor.nombre] ?? 0;
                           int gde = conteoVasosDiaGrande[sabor.nombre] ?? 0;
                           if (med == 0 && gde == 0) return const SizedBox.shrink();
@@ -1595,9 +1748,16 @@ class HistorialPorDiaVista extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('🔥 Cocinada / Lotes preparados este día:', style: TextStyle(color: Colors.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('🔥 Cocinada / Lotes preparados este día:', style: TextStyle(color: Colors.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+                          if (!sePuedeEditar)
+                            const Text('🔒 Bloqueado (Toca el lápiz para editar)', style: TextStyle(color: Colors.amberAccent, fontSize: 9)),
+                        ],
+                      ),
                       const SizedBox(height: 8),
-                      ...menuSabores.map((sabor) {
+                      ...widget.menuSabores.map((sabor) {
                         double fraccionActual = lotesDelDia[sabor.id] ?? 0.0;
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1609,24 +1769,34 @@ class HistorialPorDiaVista extends StatelessWidget {
                               ),
                               Expanded(
                                 flex: 6,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                  children: [0.0, 0.33, 0.5, 1.0].map((fraccion) {
-                                    bool sel = fraccionActual == fraccion;
-                                    String lbl = fraccion == 0.0 ? '❌ 0' : (fraccion == 0.33 ? '⅓' : (fraccion == 0.5 ? '½' : '🟢 1.0'));
-                                    return InkWell(
-                                      onTap: () => onCambiarLote(fechaObj, sabor.id, fraccion),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: sel ? Colors.cyan : const Color(0xFF1E293B),
-                                          borderRadius: BorderRadius.circular(6),
-                                          border: Border.all(color: sel ? Colors.white : Colors.white24),
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                    children: [0.0, 0.33, 0.5, 1.0, 2.0, 3.0].map((fraccion) {
+                                      bool sel = fraccionActual == fraccion;
+                                      String lbl = fraccion == 0.0 ? '❌ 0' : (fraccion == 0.33 ? '⅓' : (fraccion == 0.5 ? '½' : (fraccion == 1.0 ? '🟢 1' : '${fraccion.toInt()}')));
+                                      return Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                                        child: InkWell(
+                                          onTap: sePuedeEditar ? () => widget.onCambiarLote(fechaObj, sabor.id, fraccion) : () {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('⚠️ Día pasado bloqueado. Toca el icono de lápiz arriba para desbloquear.'), duration: Duration(seconds: 2)),
+                                            );
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: sel ? Colors.cyan : const Color(0xFF1E293B),
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: sel ? Colors.white : Colors.white24),
+                                            ),
+                                            child: Text(lbl, style: TextStyle(color: sel ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
+                                          ),
                                         ),
-                                        child: Text(lbl, style: TextStyle(color: sel ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
-                                      ),
-                                    );
-                                  }).toList(),
+                                      );
+                                    }).toList(),
+                                  ),
                                 ),
                               )
                             ],
@@ -1648,7 +1818,11 @@ class HistorialPorDiaVista extends StatelessWidget {
                       ),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                        onPressed: () => onEliminarVenta(venta.fechaHora, venta),
+                        onPressed: sePuedeEditar ? () => _confirmarBorradoVenta(fechaObj, venta) : () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('⚠️ Día pasado bloqueado. Toca el icono de lápiz arriba para poder borrar ventas.'), duration: Duration(seconds: 2)),
+                          );
+                        },
                       ),
                     ),
                   );
@@ -1670,6 +1844,7 @@ class ResumenMesVista extends StatelessWidget {
   final List<SaborInfo> menuSabores;
   final Map<String, Map<String, Map<String, double>>> lotesPorMes;
   final DateTime mesVisualizado;
+  final bool mostrarTotalAcumulado;
   final Function(int) onCambiarMes;
 
   const ResumenMesVista({
@@ -1678,6 +1853,7 @@ class ResumenMesVista extends StatelessWidget {
     required this.menuSabores,
     required this.lotesPorMes,
     required this.mesVisualizado,
+    required this.mostrarTotalAcumulado,
     required this.onCambiarMes,
   });
 
@@ -1689,6 +1865,11 @@ class ResumenMesVista extends StatelessWidget {
     List<VentaRegistrada> ventasDelMes = ventasPorMes[claveMesVisualizado] ?? [];
     Map<String, Map<String, double>> lotesDelMes = lotesPorMes[claveMesVisualizado] ?? {};
 
+    DateTime mesAnterior = DateTime(mesVisualizado.year, mesVisualizado.month - 1);
+    String claveMesAnterior = _obtenerClaveMes(mesAnterior);
+    List<VentaRegistrada> ventasMesAnterior = ventasPorMes[claveMesAnterior] ?? [];
+    List<VentaRegistrada> ventasUltimosDosMeses = [...ventasMesAnterior, ...ventasDelMes];
+
     double ventaBrutaMes = 0.0;
     double gastoInsumosMes = 0.0;
     Set<String> diasLaboradosSet = {};
@@ -1698,17 +1879,9 @@ class ResumenMesVista extends StatelessWidget {
     Map<String, int> grandesPorSabor = {};
     Map<String, double> ventaBrutaPorSabor = {};
 
-    Map<int, double> ventaPorDiaSemana = {};
-    Map<int, double> ventaPorHora = {};
-
     for (var v in ventasDelMes) {
       ventaBrutaMes += v.total;
       diasLaboradosSet.add(_obtenerClaveDia(v.fechaHora));
-
-      int diaSemana = v.fechaHora.weekday;
-      int horaVenta = v.fechaHora.hour;
-      ventaPorDiaSemana[diaSemana] = (ventaPorDiaSemana[diaSemana] ?? 0) + v.total;
-      ventaPorHora[horaVenta] = (ventaPorHora[horaVenta] ?? 0) + v.total;
 
       for (var item in v.items) {
         String sNombre = item['sabor'] ?? '';
@@ -1746,24 +1919,52 @@ class ResumenMesVista extends StatelessWidget {
     double ticketPromedio = totalTickets > 0 ? (ventaBrutaMes / totalTickets) : 0.0;
     int totalDiasLaborados = diasLaboradosSet.length;
 
+    Map<int, double> ventaPorDiaSemana2M = {};
+    Map<int, double> ventaPorHora2M = {};
+    Map<String, double> ventaBrutaPorSabor2M = {};
+
+    for (var v in ventasUltimosDosMeses) {
+      int diaSemana = v.fechaHora.weekday;
+      int horaVenta = v.fechaHora.hour;
+      ventaPorDiaSemana2M[diaSemana] = (ventaPorDiaSemana2M[diaSemana] ?? 0) + v.total;
+      ventaPorHora2M[horaVenta] = (ventaPorHora2M[horaVenta] ?? 0) + v.total;
+
+      for (var item in v.items) {
+        String sNombre = item['sabor'] ?? '';
+        double pVenta = (item['precio'] as num).toDouble();
+        var saborObj = menuSabores.firstWhere(
+          (s) => s.nombre == sNombre || sNombre.contains(s.nombre),
+          orElse: () => SaborInfo(id: '', nombre: sNombre, emoji: '', color: Colors.white, precioMediano: 0, precioGrande: 0, costoLoteCompleto: 0, costoInsumosMediano: 0, costoInsumosGrande: 0),
+        );
+        ventaBrutaPorSabor2M[saborObj.nombre] = (ventaBrutaPorSabor2M[saborObj.nombre] ?? 0) + pVenta;
+      }
+    }
+
     String mejorDiaNombre = "N/A";
-    if (ventaPorDiaSemana.isNotEmpty) {
-      int mejorDiaId = ventaPorDiaSemana.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+    if (ventaPorDiaSemana2M.isNotEmpty) {
+      int mejorDiaId = ventaPorDiaSemana2M.entries.reduce((a, b) => a.value > b.value ? a : b).key;
       mejorDiaNombre = Fechas.nombreDiaSemana(mejorDiaId);
     }
 
     String mejorHoraTexto = "N/A";
-    if (ventaPorHora.isNotEmpty) {
-      int mejorHoraId = ventaPorHora.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+    if (ventaPorHora2M.isNotEmpty) {
+      int mejorHoraId = ventaPorHora2M.entries.reduce((a, b) => a.value > b.value ? a : b).key;
       mejorHoraTexto = "$mejorHoraId:00 a ${mejorHoraId + 1}:00 hrs";
     }
 
     String productoEstrella = "N/A";
-    if (ventaBrutaPorSabor.isNotEmpty) {
-      productoEstrella = ventaBrutaPorSabor.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+    if (ventaBrutaPorSabor2M.isNotEmpty) {
+      productoEstrella = ventaBrutaPorSabor2M.entries.reduce((a, b) => a.value > b.value ? a : b).key;
     }
 
     String mesNombreVisualizado = Fechas.nombreMesAnio(mesVisualizado);
+
+    Color colorGananciaNeta;
+    if (!mostrarTotalAcumulado) {
+      colorGananciaNeta = Colors.white;
+    } else {
+      colorGananciaNeta = gananciaNetaMes >= 0 ? Colors.greenAccent : Colors.redAccent;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -1800,11 +2001,11 @@ class ResumenMesVista extends StatelessWidget {
                               const Text('💰 Ganancia Neta Limpia Real', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
                               const SizedBox(height: 8),
                               Text(
-                                '\$${gananciaNetaMes.toStringAsFixed(2)} MXN',
+                                mostrarTotalAcumulado ? '\$${gananciaNetaMes.toStringAsFixed(2)} MXN' : '\$ • • • • •',
                                 style: TextStyle(
                                   fontSize: 28,
                                   fontWeight: FontWeight.bold,
-                                  color: gananciaNetaMes >= 0 ? Colors.greenAccent : Colors.redAccent,
+                                  color: colorGananciaNeta,
                                 ),
                               ),
                               const SizedBox(height: 12),
@@ -1813,9 +2014,21 @@ class ResumenMesVista extends StatelessWidget {
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                                 children: [
-                                  _MiniDatoFinanciero(label: 'Venta Bruta', value: '\$${ventaBrutaMes.toStringAsFixed(0)}', color: Colors.white),
-                                  _MiniDatoFinanciero(label: 'Gasto Total', value: '\$${gastoTotalMes.toStringAsFixed(0)}', color: Colors.orangeAccent),
-                                  _MiniDatoFinanciero(label: 'Días Laborados', value: '$totalDiasLaborados días', color: Colors.cyan),
+                                  _MiniDatoFinanciero(
+                                    label: 'Venta Bruta',
+                                    value: mostrarTotalAcumulado ? '\$${ventaBrutaMes.toStringAsFixed(0)}' : '• • •',
+                                    color: Colors.white,
+                                  ),
+                                  _MiniDatoFinanciero(
+                                    label: 'Gasto Total',
+                                    value: mostrarTotalAcumulado ? '\$${gastoTotalMes.toStringAsFixed(0)}' : '• • •',
+                                    color: Colors.orangeAccent,
+                                  ),
+                                  _MiniDatoFinanciero(
+                                    label: 'Días Laborados',
+                                    value: '$totalDiasLaborados días',
+                                    color: Colors.cyan,
+                                  ),
                                 ],
                               )
                             ],
@@ -1827,13 +2040,13 @@ class ResumenMesVista extends StatelessWidget {
                       const SizedBox(height: 8),
                       Row(
                         children: [
-                          Expanded(child: _CardEstadisticaSimple(icon: Icons.percent, label: 'Margen Neta', value: '${margenGananciaPromedio.toStringAsFixed(1)}%', colorValue: Colors.greenAccent)),
+                          Expanded(child: _CardEstadisticaSimple(icon: Icons.percent, label: 'Margen Neta', value: mostrarTotalAcumulado ? '${margenGananciaPromedio.toStringAsFixed(1)}%' : '• • •', colorValue: Colors.greenAccent)),
                           const SizedBox(width: 12),
-                          Expanded(child: _CardEstadisticaSimple(icon: Icons.receipt_long, label: 'Ticket Promedio', value: '\$${ticketPromedio.toStringAsFixed(1)}', colorValue: Colors.white)),
+                          Expanded(child: _CardEstadisticaSimple(icon: Icons.receipt_long, label: 'Ticket Promedio (2M)', value: mostrarTotalAcumulado ? '\$${ticketPromedio.toStringAsFixed(1)}' : '• • •', colorValue: Colors.white)),
                         ],
                       ),
                       const SizedBox(height: 20),
-                      const Text('💡 Inteligencia de Venta:', style: TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold, fontSize: 15)),
+                      const Text('💡 Inteligencia de Venta (Últimos 2 Meses):', style: TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold, fontSize: 15)),
                       const SizedBox(height: 10),
                       _CardEstadisticaLarga(icon: Icons.star, label: 'Sabor Estrella', value: productoEstrella, colorValue: Colors.amberAccent),
                       const SizedBox(height: 10),
@@ -1841,33 +2054,54 @@ class ResumenMesVista extends StatelessWidget {
                       const SizedBox(height: 10),
                       _CardEstadisticaLarga(icon: Icons.access_time_filled, label: 'Hora Pico de Venta', value: mejorHoraTexto, colorValue: Colors.orangeAccent),
                       const SizedBox(height: 24),
-                      const Text('🍿 Desglose de Vasos Vendidos:', style: TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold, fontSize: 16)),
+                      const Text('🍿 Desglose de Vasos (Equivalente Mediano / Factor 1.66):', style: TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold, fontSize: 15)),
                       const SizedBox(height: 12),
                       ...menuSabores.map((sabor) {
                         int totalMed = medianosPorSabor[sabor.nombre] ?? 0;
                         int totalGde = grandesPorSabor[sabor.nombre] ?? 0;
-                        int totalVasos = totalMed + totalGde;
+                        double equivalenciaGrandesEnMedianos = totalGde * 1.66;
+                        double totalVasosEquivalentes = totalMed + equivalenciaGrandesEnMedianos;
+
+                        double margenMediano = sabor.precioMediano > 0 ? ((sabor.precioMediano - sabor.costoInsumosMediano) / sabor.precioMediano) * 100 : 0.0;
+                        double gananciaPesosMediano = sabor.precioMediano - sabor.costoInsumosMediano;
+                        double gananciaPesosGrande = sabor.precioGrande - sabor.costoInsumosGrande;
+
                         return Card(
                           color: const Color(0xFF1E293B),
                           margin: const EdgeInsets.only(bottom: 10),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           child: Padding(
                             padding: const EdgeInsets.all(12),
-                            child: Row(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                CircleAvatar(backgroundColor: sabor.color, radius: 18, child: Text(sabor.emoji, style: const TextStyle(fontSize: 18))),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(sabor.nombre, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                                      const SizedBox(height: 2),
-                                      Text('Medianos: $totalMed  |  Grandes: $totalGde', style: const TextStyle(color: Colors.white60, fontSize: 12)),
-                                    ],
-                                  ),
+                                Row(
+                                  children: [
+                                    CircleAvatar(backgroundColor: sabor.color, radius: 16, child: Text(sabor.emoji, style: const TextStyle(fontSize: 16))),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(sabor.nombre, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                                    ),
+                                    Text('${totalVasosEquivalentes.toStringAsFixed(1)} vasos eq.', style: const TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ],
                                 ),
-                                Text('$totalVasos vasos', style: const TextStyle(color: Colors.cyan, fontWeight: FontWeight.bold, fontSize: 14)),
+                                const SizedBox(height: 6),
+                                const Divider(color: Colors.white10),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('Medianos: $totalMed | Grandes: $totalGde', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                    Text('Margen Med: ${margenMediano.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.greenAccent, fontSize: 11)),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('Ganancia neta/vaso: Med: \$${gananciaPesosMediano.toStringAsFixed(1)} | Gde: \$${gananciaPesosGrande.toStringAsFixed(1)}', style: const TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                                  ],
+                                ),
                               ],
                             ),
                           ),
@@ -2201,7 +2435,7 @@ class _DialogoEditarSaborState extends State<_DialogoEditarSabor> {
 }
 
 // -----------------------------------------------------------------------------
-// BOTÓN POP (Con animación de escala y vibración)
+// BOTÓN POP
 // -----------------------------------------------------------------------------
 class _BotonPop extends StatefulWidget {
   final String label;
@@ -2212,7 +2446,6 @@ class _BotonPop extends StatefulWidget {
   final VoidCallback onTap;
 
   const _BotonPop({
-    super.key,
     required this.label,
     required this.precio,
     required this.color,
