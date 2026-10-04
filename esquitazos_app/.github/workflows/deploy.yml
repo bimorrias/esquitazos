@@ -2,14 +2,14 @@ name: Deploy Web PWA
 
 on:
   push:
-    branches: [ main ]
-
-permissions:
-  contents: write
+    branches:
+      - main
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,10 +20,10 @@ jobs:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      - name: Get dependencies
+      - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build Web app
+      - name: Build Web
         run: flutter build web --release --base-href "/esquitazos/"
 
       - name: Deploy to GitHub Pages
