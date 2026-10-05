@@ -19,10 +19,10 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.13.1  
 
-flutter_launcher_icons:
-  image_path: "logo_esquitazos.png"
+flutter_icons:
+  image_path: "logo.png"
   android: true
-  web: true
+  ios: true
 
 flutter:
   uses-material-design: true

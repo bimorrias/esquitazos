@@ -1919,6 +1919,14 @@ class ResumenMesVista extends StatelessWidget {
     double ticketPromedio = totalTickets > 0 ? (ventaBrutaMes / totalTickets) : 0.0;
     int totalDiasLaborados = diasLaboradosSet.length;
 
+    // 🌟 CÁLCULO DEL GRAN TOTAL DE VASOS EQUIVALENTES DEL MES
+    double granTotalVasosEquivalentesMes = 0.0;
+    for (var sabor in menuSabores) {
+      int totalMed = medianosPorSabor[sabor.nombre] ?? 0;
+      int totalGde = grandesPorSabor[sabor.nombre] ?? 0;
+      granTotalVasosEquivalentesMes += totalMed + (totalGde * 1.66);
+    }
+
     Map<int, double> ventaPorDiaSemana2M = {};
     Map<int, double> ventaPorHora2M = {};
     Map<String, double> ventaBrutaPorSabor2M = {};
@@ -2107,6 +2115,37 @@ class ResumenMesVista extends StatelessWidget {
                           ),
                         );
                       }),
+                      const SizedBox(height: 12),
+                      // 🌟 TARJETA CON EL GRAN TOTAL DE VASOS EQUIVALENTES DEL MES HASTA ABAJO
+                      Card(
+                        color: const Color(0xFF0F172A),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: const BorderSide(color: Colors.cyan, width: 1.5),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.local_mall, color: Colors.cyan, size: 24),
+                                  SizedBox(width: 10),
+                                  Text(
+                                    'Total Vasos del Mes\n(Equivalentes a Mediano):',
+                                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                              Text(
+                                '${granTotalVasosEquivalentesMes.toStringAsFixed(1)} eq.',
+                                style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 20),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 40),
                     ],
                   ),
